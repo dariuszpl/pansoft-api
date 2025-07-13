@@ -1,0 +1,85 @@
+from fastapi import APIRouter, Request, Depends
+from fastapi.responses import RedirectResponse, JSONResponse
+import httpx
+from urllib.parse import urlencode
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+
+from app.database import SessionLocal
+from app.models import User
+
+from app.config import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, AUTH_URL, TOKEN_URL
+
+router = APIRouter(prefix="/auth", tags=["Auth"])
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+@router.get("/login")
+def login_with_allegro():
+    params = {
+        "response_type": "code",
+        "client_id": CLIENT_ID,
+        "redirect_uri": REDIRECT_URI,
+    }
+    url = f"{AUTH_URL}?{urlencode(params)}"
+    return RedirectResponse(url)
+
+
+@router.get("/callback")
+async def auth_callback(request: Request, db: AsyncSession = Depends(get_db)):
+    code = request.query_params.get("code")
+    if not code:
+        return JSONResponse(status_code=400, content={"error": "Brak kodu autoryzacyjnego."})
+
+    async with httpx.AsyncClient() as client:
+        try:
+            headers = {
+                "Authorization": f"Basic {httpx.auth._basic_auth_str(CLIENT_ID, CLIENT_SECRET)}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            }
+            data = {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": REDIRECT_URI,
+            }
+
+            response = await client.post(TOKEN_URL, data=data, headers=headers)
+            response.raise_for_status()
+            token_data = response.json()
+        except httpx.HTTPStatusError as e:
+            return JSONResponse(status_code=e.response.status_code, content={
+                "error": f"Nie udało się pobrać tokenu: {str(e)}"
+            })
+
+    allegro_user_id = token_data.get("user_id")
+    if not allegro_user_id:
+        return JSONResponse(status_code=400, content={"error": "Brak user_id w odpowiedzi Allegro"})
+
+    # 🔽 sprawdź czy user już istnieje
+    result = await db.execute(select(User).where(User.allegro_id == allegro_user_id))
+    user = result.scalars().first()
+
+    if user:
+        user.access_token = token_data.get("access_token")
+        user.refresh_token = token_data.get("refresh_token")
+        user.expires_in = token_data.get("expires_in")
+    else:
+        user = User(
+            allegro_id=allegro_user_id,
+            access_token=token_data.get("access_token"),
+            refresh_token=token_data.get("refresh_token"),
+            expires_in=token_data.get("expires_in")
+        )
+        db.add(user)
+
+    await db.commit()
+
+    return JSONResponse(content={
+        "message": "✅ Token został zapisany",
+        "allegro_id": allegro_user_id
+    })
