@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import RedirectResponse, JSONResponse
 import httpx
+import base64
 from urllib.parse import urlencode
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -38,9 +39,11 @@ async def auth_callback(request: Request, db: AsyncSession = Depends(get_db)):
 
     async with httpx.AsyncClient() as client:
         try:
+            credentials = f"{CLIENT_ID}:{CLIENT_SECRET}"
+            encoded_credentials = base64.b64encode(credentials.encode()).decode()
             headers = {
-                "Authorization": f"Basic {httpx.auth._basic_auth_str(CLIENT_ID, CLIENT_SECRET)}",
-                "Content-Type": "application/x-www-form-urlencoded",
+                "Authorization": f"Basic {encoded_credentials}",
+                "Content-Type": "application/x-www-form-urlencoded"
             }
             data = {
                 "grant_type": "authorization_code",
