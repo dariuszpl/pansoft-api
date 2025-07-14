@@ -54,12 +54,33 @@ async def auth_callback(request: Request, db: AsyncSession = Depends(get_db)):
             response = await client.post(TOKEN_URL, data=data, headers=headers)
             response.raise_for_status()
             token_data = response.json()
+
+            if "access_token" not in token_data:
+                return {"error": "Nie udało się pobrać access_token"}
+
+            access_token = token_data["access_token"]
+            refresh_token = token_data.get("refresh_token")
+
+            # 👇 Zapytanie o user_id z access_token
+            user_info_headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/vnd.allegro.public.v1+json"
+            }
+
+            user_response = await client.get("https://api.allegro.pl.me/auth/user/me", headers=user_info_headers)
+            user_info = user_response.json()
+
+            if "id" not in user_info:
+                return {"error": "Nie udało się pobrać user_id"}
+
+            allegro_user_id = user_info["id"]
+
+
         except httpx.HTTPStatusError as e:
             return JSONResponse(status_code=e.response.status_code, content={
                 "error": f"Nie udało się pobrać tokenu: {str(e)}"
             })
-
-    allegro_user_id = token_data.get("user_id")
+     
     if not allegro_user_id:
         return JSONResponse(status_code=400, content={"error": "Brak user_id w odpowiedzi Allegro"})
 
